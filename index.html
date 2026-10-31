@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>クイックソート パーティション ステップ デモ</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f172a; }
+  .bar-container { display: flex; align-items: flex-end; gap: 2px; height: 240px; padding: 0 4px; }
+  .bar { flex: 1; min-width: 8px; transition: height 0.15s ease, background-color 0.1s; border-radius: 2px 2px 0 0; position: relative; }
+  .bar-label { position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%); font-size: 9px; color: #64748b; white-space: nowrap; }
+  .bar-val { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 9px; color: #94a3b8; white-space: nowrap; }
+</style>
+</head>
+<body class="min-h-screen text-slate-100 p-4">
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold text-indigo-400 mb-1">クイックソート パーティション ステップ デモ</h1>
+  <p class="text-slate-400 text-sm mb-4">ピボット選択と分割過程を棒グラフアニメーションで可視化</p>
+
+  <!-- Controls -->
+  <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+    <div class="bg-slate-800 rounded-lg p-3">
+      <label class="text-xs text-slate-400 block mb-1" for="sizeSlider">配列サイズ: <span id="sizeVal">16</span></label>
+      <input id="sizeSlider" type="range" min="5" max="30" value="16" class="w-full" oninput="document.getElementById('sizeVal').textContent=this.value">
+    </div>
+    <div class="bg-slate-800 rounded-lg p-3">
+      <p class="text-xs text-slate-400 mb-2">初期配列</p>
+      <div class="flex gap-1">
+        <button onclick="genArray('random')" class="flex-1 py-1 rounded text-xs bg-indigo-700 hover:bg-indigo-600 text-white" aria-label="ランダム配列">乱</button>
+        <button onclick="genArray('desc')" class="flex-1 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-200" aria-label="逆順配列">↓</button>
+        <button onclick="genArray('asc')" class="flex-1 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-200" aria-label="昇順配列">↑</button>
+      </div>
+    </div>
+    <div class="bg-slate-800 rounded-lg p-3 flex flex-col gap-1">
+      <button onclick="stepSort()" id="btnStep" class="bg-indigo-600 hover:bg-indigo-500 text-white rounded py-1 text-sm font-medium" aria-label="1ステップ実行">1ステップ</button>
+      <button onclick="toggleAuto()" id="btnAuto" class="bg-purple-700 hover:bg-purple-600 text-white rounded py-1 text-sm font-medium" aria-label="自動実行">▶ 自動実行</button>
+    </div>
+  </div>
+
+  <!-- Counters -->
+  <div class="grid grid-cols-3 gap-3 mb-4">
+    <div class="bg-slate-800 rounded-lg p-3 text-center">
+      <p class="text-xs text-slate-400">比較回数</p>
+      <p id="cmpCount" class="text-2xl font-bold text-yellow-400">0</p>
+    </div>
+    <div class="bg-slate-800 rounded-lg p-3 text-center">
+      <p class="text-xs text-slate-400">スワップ回数</p>
+      <p id="swpCount" class="text-2xl font-bold text-red-400">0</p>
+    </div>
+    <div class="bg-slate-800 rounded-lg p-3 text-center">
+      <p class="text-xs text-slate-400">状態</p>
+      <p id="statusText" class="text-sm font-medium text-emerald-400">準備完了</p>
+    </div>
+  </div>
+
+  <!-- Bar chart -->
+  <div class="bg-slate-800 rounded-lg p-4 mb-4">
+    <div id="barChart" class="bar-container mb-8"></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="flex flex-wrap gap-4 text-xs bg-slate-800 rounded-lg p-3 mb-4">
+    <span class="flex items-center gap-1"><span class="inline-block w-4 h-4 rounded" style="background:#ef4444"></span>ピボット</span>
+    <span class="flex items-center gap-1"><span class="inline-block w-4 h-4 rounded" style="background:#facc15"></span>比較対象</span>
+    <span class="flex items-center gap-1"><span class="inline-block w-4 h-4 rounded" style="background:#6366f1"></span>未処理</span>
+    <span class="flex items-center gap-1"><span class="inline-block w-4 h-4 rounded" style="background:#22c55e"></span>確定済み</span>
+    <span class="flex items-center gap-1"><span class="inline-block w-4 h-4 rounded" style="background:#64748b"></span>範囲外</span>
+  </div>
+
+  <!-- Step log -->
+  <div class="bg-slate-800 rounded-lg p-3">
+    <p class="text-xs text-slate-400 mb-2">ステップログ</p>
+    <div id="logBox" class="text-xs font-mono text-slate-300 h-28 overflow-y-auto space-y-0.5"></div>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+let arr = [];
+let sortSteps = [];
+let stepIdx = 0;
+let comparisons = 0;
+let swaps = 0;
+let autoTimer = null;
+let done = false;
+
+function genArray(type) {
+  stopAuto();
+  const n = parseInt(document.getElementById('sizeSlider').value);
+  if (type === 'random') {
+    arr = Array.from({length: n}, () => Math.floor(Math.random() * 95) + 5);
+  } else if (type === 'desc') {
+    arr = Array.from({length: n}, (_, i) => Math.round(((n - i) / n) * 95) + 5);
+  } else {
+    arr = Array.from({length: n}, (_, i) => Math.round(((i + 1) / n) * 95) + 5);
+  }
+  buildSteps();
+  render(0);
+  document.getElementById('cmpCount').textContent = '0';
+  document.getElementById('swpCount').textContent = '0';
+  document.getElementById('statusText').textContent = '準備完了';
+  document.getElementById('logBox').innerHTML = '';
+  document.getElementById('btnStep').disabled = false;
+  document.getElementById('btnAuto').textContent = '▶ 自動実行';
+  done = false;
+}
+
+// Generate all quicksort steps upfront
+function buildSteps() {
+  sortSteps = [];
+  stepIdx = 0;
+  comparisons = 0;
+  swaps = 0;
+  const a = [...arr];
+
+  function partition(a, lo, hi, steps) {
+    const pivot = a[hi];
+    steps.push({ type: 'pivot', arr: [...a], pivot: hi, lo, hi, i: lo-1, j: lo, phase: 'start' });
+    let i = lo - 1;
+    for (let j = lo; j < hi; j++) {
+      steps.push({ type: 'compare', arr: [...a], pivot: hi, lo, hi, i, j });
+      if (a[j] <= pivot) {
+        i++;
+        [a[i], a[j]] = [a[j], a[i]];
+        steps.push({ type: 'swap', arr: [...a], pivot: hi, lo, hi, i, j });
+      }
+    }
+    [a[i+1], a[hi]] = [a[hi], a[i+1]];
+    steps.push({ type: 'place', arr: [...a], pivot: i+1, lo, hi, i: i+1, j: hi });
+    return i + 1;
+  }
+
+  function qs(a, lo, hi, steps, sorted) {
+    if (lo >= hi) {
+      if (lo === hi) sorted.add(lo);
+      return;
+    }
+    const p = partition(a, lo, hi, steps);
+    sorted.add(p);
+    qs(a, lo, p - 1, steps, sorted);
+    qs(a, p + 1, hi, steps, sorted);
+    // Mark range as sorted after both halves
+    for (let k = lo; k <= hi; k++) sorted.add(k);
+    steps.push({ type: 'sorted_range', arr: [...a], lo, hi, sorted: new Set(sorted) });
+  }
+
+  const sorted = new Set();
+  qs(a, 0, a.length - 1, sortSteps, sorted);
+  sortSteps.push({ type: 'done', arr: [...a], sorted: new Set(Array.from({length: a.length}, (_, i) => i)) });
+}
+
+function render(idx) {
+  const chart = document.getElementById('barChart');
+  if (sortSteps.length === 0) {
+    // Just render raw array
+    const n = arr.length;
+    const maxVal = Math.max(...arr, 1);
+    chart.innerHTML = '';
+    arr.forEach((v, i) => {
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.style.height = (v / maxVal * 220) + 'px';
+      bar.style.background = '#6366f1';
+      if (n <= 20) bar.innerHTML = `<span class="bar-val">${escapeHtml(String(v))}</span>`;
+      chart.appendChild(bar);
+    });
+    return;
+  }
+  if (idx >= sortSteps.length) idx = sortSteps.length - 1;
+  const step = sortSteps[idx];
+  const a = step.arr;
+  const maxVal = Math.max(...a, 1);
+  const n = a.length;
+
+  chart.innerHTML = '';
+  a.forEach((v, i) => {
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.style.height = (v / maxVal * 220) + 'px';
+
+    let color = '#6366f1';
+    if (step.sorted && step.sorted.has(i)) color = '#22c55e';
+    if (i < step.lo || i > step.hi) color = '#334155';
+    if (step.type === 'compare' && i === step.j) color = '#facc15';
+    if (step.type === 'swap' && (i === step.i || i === step.j)) color = '#f97316';
+    if (step.pivot === i && step.type !== 'sorted_range' && step.type !== 'done') color = '#ef4444';
+    if (step.type === 'done') color = '#22c55e';
+
+    bar.style.background = color;
+    if (n <= 20) bar.innerHTML = `<span class="bar-val">${escapeHtml(String(v))}</span>`;
+    chart.appendChild(bar);
+  });
+}
+
+function addLog(msg) {
+  const box = document.getElementById('logBox');
+  const line = document.createElement('div');
+  line.innerHTML = escapeHtml(msg);
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function stepSort() {
+  if (done || sortSteps.length === 0) return;
+  const step = sortSteps[stepIdx];
+
+  if (step.type === 'compare') {
+    comparisons++;
+    document.getElementById('cmpCount').textContent = comparisons;
+    document.getElementById('statusText').textContent = `比較: [${step.j}] vs pivot[${step.pivot}]`;
+    addLog(`Step ${stepIdx+1}: 比較 arr[${step.j}]=${step.arr[step.j]} と pivot=${step.arr[step.pivot]}`);
+  } else if (step.type === 'swap') {
+    swaps++;
+    document.getElementById('swpCount').textContent = swaps;
+    document.getElementById('statusText').textContent = `スワップ: [${step.i}] ↔ [${step.j}]`;
+    addLog(`Step ${stepIdx+1}: スワップ arr[${step.i}]=${step.arr[step.i]} ↔ arr[${step.j}]=${step.arr[step.j]}`);
+  } else if (step.type === 'pivot') {
+    document.getElementById('statusText').textContent = `ピボット: arr[${step.pivot}]=${step.arr[step.pivot]}`;
+    addLog(`Step ${stepIdx+1}: ピボット選択 arr[${step.pivot}]=${step.arr[step.pivot]} (範囲 ${step.lo}-${step.hi})`);
+  } else if (step.type === 'place') {
+    document.getElementById('statusText').textContent = `ピボット配置: 位置 ${step.i}`;
+    addLog(`Step ${stepIdx+1}: ピボット確定 → 位置 ${step.i}`);
+  } else if (step.type === 'sorted_range') {
+    document.getElementById('statusText').textContent = `範囲確定: ${step.lo}-${step.hi}`;
+  } else if (step.type === 'done') {
+    document.getElementById('statusText').textContent = 'ソート完了！';
+    addLog(`完了！ 比較: ${comparisons}回 スワップ: ${swaps}回`);
+    done = true;
+    stopAuto();
+    document.getElementById('btnStep').disabled = true;
+  }
+
+  render(stepIdx);
+  stepIdx++;
+}
+
+function toggleAuto() {
+  if (autoTimer) {
+    stopAuto();
+  } else {
+    document.getElementById('btnAuto').textContent = '⏸ 停止';
+    autoTimer = setInterval(() => {
+      if (done) { stopAuto(); return; }
+      stepSort();
+    }, 180);
+  }
+}
+
+function stopAuto() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  document.getElementById('btnAuto').textContent = '▶ 自動実行';
+}
+
+document.getElementById('sizeSlider').addEventListener('input', () => genArray('random'));
+genArray('random');
+</script>
+</body>
+</html>
